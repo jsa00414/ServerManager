@@ -1,0 +1,6 @@
+# VPS public port → LAN destination (via WireGuard)
+# Format: PUBLIC_PORT PROTO DEST_IP DEST_PORT NAME
+# Example:
+# 8080 tcp 192.168.8.1 80 router-http-admin
+# 2222 tcp 192.168.8.1 22 router-ssh
+# 3389 tcp 192.168.8.100 3389 pc-rdp

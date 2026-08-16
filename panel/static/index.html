@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Forward Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #0b100e;
+      --bg1: #121a17;
+      --bg2: #18231e;
+      --bg3: #1e2c26;
+      --line: rgba(170, 210, 185, 0.12);
+      --text: #e7f1eb;
+      --muted: #7f9689;
+      --accent: #3ddea0;
+      --accent-dim: rgba(61, 222, 160, 0.12);
+      --danger: #ff6b6b;
+      --ok: #3ddea0;
+      --warn: #e2b45a;
+      --sidebar-w: 240px;
+      --top-h: 64px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: "Sora", system-ui, sans-serif;
+      color: var(--text);
+      background: var(--bg0);
+      display: grid;
+      grid-template-columns: var(--sidebar-w) 1fr;
+      grid-template-rows: var(--top-h) 1fr;
+      min-height: 100vh;
+    }
+
+    .topbar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg1) 92%, black);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .brand-mark {
+      width: 34px; height: 34px; border-radius: 9px;
+      background: linear-gradient(145deg, var(--accent), #1f8f66);
+      color: #062016; font-weight: 700; font-size: .85rem;
+      display: grid; place-items: center; flex: none;
+    }
+    .brand h1 {
+      margin: 0; font-size: 1.05rem; letter-spacing: -.02em; font-weight: 700;
+    }
+    .brand p {
+      margin: 2px 0 0; color: var(--muted); font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .top-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .status {
+      font-family: "IBM Plex Mono", monospace; font-size: .72rem; color: var(--muted);
+      background: var(--bg2); border: 1px solid var(--line); border-radius: 999px; padding: 7px 11px;
+    }
+    .status.ok { color: var(--ok); border-color: rgba(61,222,160,.35); background: var(--accent-dim); }
+    .status.err { color: var(--danger); border-color: rgba(255,107,107,.35); }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: var(--bg1);
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow: auto;
+    }
+    .nav-label {
+      color: var(--muted); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase;
+      padding: 8px 10px 6px; font-weight: 600;
+    }
+    .nav-btn {
+      width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
+      color: var(--text); border-radius: 10px; padding: 11px 12px; cursor: pointer;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      font-family: inherit; font-size: .88rem; font-weight: 600;
+    }
+    .nav-btn:hover { background: var(--bg2); border-color: var(--line); }
+    .nav-btn.active {
+      background: var(--accent-dim); border-color: rgba(61,222,160,.28); color: var(--accent);
+    }
+    .nav-btn small { color: var(--muted); font-weight: 500; font-size: .75rem; }
+    .nav-btn.active small { color: rgba(61,222,160,.8); }
+    .count {
+      min-width: 22px; height: 22px; border-radius: 999px; display: grid; place-items: center;
+      background: var(--bg3); color: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: .7rem;
+    }
+    .nav-btn.active .count { background: rgba(61,222,160,.2); color: var(--accent); }
+    .sidebar-foot {
+      margin-top: auto; padding: 12px 10px; color: var(--muted); font-size: .72rem; line-height: 1.45;
+      border-top: 1px solid var(--line);
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-width: 0;
+      background:
+        radial-gradient(700px 280px at 100% 0%, rgba(61,222,160,.08), transparent 55%),
+        var(--bg0);
+    }
+    .content { overflow: auto; padding: 18px 20px; }
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .panel {
+      background: var(--bg1);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center;
+      padding: 14px 16px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.02);
+    }
+    .panel-head h2 { margin: 0; font-size: 1rem; letter-spacing: -.02em; }
+    .panel-head .hint, .meta .hint, .hint { color: var(--muted); font-size: .78rem; }
+    .meta {
+      display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+      padding: 12px 16px; border-bottom: 1px solid var(--line); background: rgba(0,0,0,.15);
+    }
+    .meta label { color: var(--muted); font-size: .78rem; min-width: 72px; }
+    .meta input { max-width: 220px; }
+
+    button {
+      font-family: inherit; font-weight: 600; font-size: .84rem; border-radius: 9px;
+      border: 1px solid var(--line); background: var(--bg2); color: var(--text);
+      padding: 9px 13px; cursor: pointer;
+    }
+    button:hover { border-color: rgba(61,222,160,.35); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    button.primary { background: var(--accent); color: #062016; border-color: transparent; }
+    button.ghost.danger { color: var(--danger); padding: 8px 10px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    th {
+      font-size: .68rem; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--muted); font-weight: 600; background: rgba(0,0,0,.22); position: sticky; top: 0;
+    }
+    tr:hover td { background: rgba(61,222,160,.03); }
+    tr[data-external="1"] td, tr[data-protected="1"] td { opacity: .92; }
+    input, select {
+      width: 100%; font-family: "IBM Plex Mono", monospace; font-size: .82rem;
+      color: var(--text); background: var(--bg0); border: 1px solid var(--line);
+      border-radius: 8px; padding: 8px 9px; outline: none;
+    }
+    input:focus, select:focus { border-color: rgba(61,222,160,.55); box-shadow: 0 0 0 3px rgba(61,222,160,.12); }
+    input[readonly], select:disabled { opacity: .75; cursor: default; background: #0a0f0d; }
+    .arrow { color: var(--accent); font-family: "IBM Plex Mono", monospace; opacity: .85; text-align: center; }
+    .empty { padding: 36px 18px; text-align: center; color: var(--muted); }
+    .check { width: 42px; }
+    .tag {
+      display: inline-block; margin-top: 4px; font-size: .68rem; color: var(--warn);
+      font-family: "IBM Plex Mono", monospace;
+    }
+
+    .drawer {
+      border-top: 1px solid var(--line);
+      background: var(--bg1);
+      max-height: 220px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    .drawer-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 16px; color: var(--muted); font-size: .75rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .log {
+      margin: 0; white-space: pre-wrap; font-family: "IBM Plex Mono", monospace;
+      font-size: .72rem; line-height: 1.45; color: #b7cfc3; background: #080c0a;
+      padding: 12px 16px; overflow: auto; min-height: 72px;
+    }
+    .path { font-family: "IBM Plex Mono", monospace; font-size: .72rem; color: var(--muted); }
+
+    @media (max-width: 900px) {
+      body { grid-template-columns: 1fr; grid-template-rows: var(--top-h) auto 1fr; }
+      .sidebar {
+        flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line);
+        padding: 10px;
+      }
+      .nav-label, .sidebar-foot { display: none; }
+      .nav-btn { white-space: nowrap; width: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">PF</div>
+      <div>
+        <h1>ServerManager</h1>
+        <p>VPS · GL.iNet · Domains · Firewall</p>
+      </div>
+    </div>
+    <div class="top-right">
+      <div id="status" class="status">Loading…</div>
+      <div class="actions">
+        <button type="button" id="reloadBtn">Reload</button>
+        <button type="button" class="primary" id="saveBtn">Save &amp; Apply</button>
+      </div>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+    <div class="nav-label">Sections</div>
+    <button type="button" class="nav-btn active" data-view="vps">
+      <span>VPS forwards</span><span class="count" id="vpsCount">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="router">
+      <span>GL.iNet router</span><span class="count" id="routerCount">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="domains">
+      <span>Domain hookups</span><span class="count" id="hookupCount">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="firewall">
+      <span>Firewall</span><span class="count" id="fwCount">0</span>
+    </button>
+    <div class="sidebar-foot">
+      Changes apply to WireGuard DNAT, GL.iNet <span class="path">port_forward</span>, Caddy, and UFW.
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="content">
+      <section class="view active" id="view-vps">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>VPS public forwards</h2>
+              <div class="hint">VPS public IP → GL.iNet LAN via WireGuard</div>
+            </div>
+            <button type="button" id="addVpsBtn">Add rule</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Public</th><th>Proto</th><th></th><th>LAN IP</th><th>LAN port</th><th>Name</th><th></th></tr>
+              </thead>
+              <tbody id="vpsRows"></tbody>
+            </table>
+            <div id="vpsEmpty" class="empty" hidden>No VPS rules.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-router">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>GL.iNet router</h2>
+              <div class="hint" id="routerHint">port_forward + DMZ</div>
+            </div>
+            <button type="button" id="addRouterBtn">Add rule</button>
+          </div>
+          <div class="meta">
+            <label for="dmzIp">DMZ host</label>
+            <input id="dmzIp" placeholder="192.168.8.243" />
+            <span class="hint">WAN DMZ target on the GL.iNet</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th class="check">On</th><th>Src</th><th>Src port</th><th>Proto</th><th></th><th>LAN IP</th><th>LAN port</th><th>Name</th><th></th></tr>
+              </thead>
+              <tbody id="routerRows"></tbody>
+            </table>
+            <div id="routerEmpty" class="empty" hidden>No router redirect rules.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-domains">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Domain hookups</h2>
+              <div class="hint" id="hookupsHint">Caddy HTTPS reverse proxies</div>
+            </div>
+            <button type="button" id="addHookupBtn">Add domain</button>
+          </div>
+          <div class="meta">
+            <span class="hint" id="dnsHint">Create Cloudflare A records (DNS only) → your VPS IP</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th class="check">On</th><th class="check">VPN</th><th>Domain</th><th></th><th>Target host</th><th>Port</th><th>Name</th><th></th></tr>
+              </thead>
+              <tbody id="hookupRows"></tbody>
+            </table>
+            <div id="hookupEmpty" class="empty" hidden>No domain hookups.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-firewall">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>VPS firewall (UFW)</h2>
+              <div class="hint" id="fwHint">Host firewall after IONOS</div>
+            </div>
+            <button type="button" id="addFwBtn">Allow port</button>
+          </div>
+          <div class="meta" id="fwMeta">
+            <span class="hint">Loading…</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th class="check">VPN</th><th>Port</th><th>Proto</th><th>Action</th><th>Comment</th><th></th></tr>
+              </thead>
+              <tbody id="fwRows"></tbody>
+            </table>
+            <div id="fwEmpty" class="empty" hidden>No firewall allow rules.</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="drawer">
+      <div class="drawer-head">
+        <span>Apply log</span>
+        <span class="path" id="pathLabel">—</span>
+      </div>
+      <pre id="log" class="log">Ready.</pre>
+    </div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const pathLabel = document.getElementById("pathLabel");
+    const logEl = document.getElementById("log");
+    const dmzIpEl = document.getElementById("dmzIp");
+    const dnsHint = document.getElementById("dnsHint");
+    const vpsRows = document.getElementById("vpsRows");
+    const routerRows = document.getElementById("routerRows");
+    const hookupRows = document.getElementById("hookupRows");
+    const vpsEmpty = document.getElementById("vpsEmpty");
+    const routerEmpty = document.getElementById("routerEmpty");
+    const hookupEmpty = document.getElementById("hookupEmpty");
+    const saveBtn = document.getElementById("saveBtn");
+    const reloadBtn = document.getElementById("reloadBtn");
+    const vpsCount = document.getElementById("vpsCount");
+    const routerCount = document.getElementById("routerCount");
+    const hookupCount = document.getElementById("hookupCount");
+    const fwCount = document.getElementById("fwCount");
+    const fwRows = document.getElementById("fwRows");
+    const fwEmpty = document.getElementById("fwEmpty");
+    const fwMeta = document.getElementById("fwMeta");
+    const fwHint = document.getElementById("fwHint");
+
+    let comments = [];
+    let vpsRules = [];
+    let routerRules = [];
+    let hookupRules = [];
+    let fwRules = [];
+    let fwInfo = {};
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      statusEl.className = "status" + (kind ? " " + kind : "");
+    }
+    function showLog(text) {
+      logEl.textContent = text || "Ready.";
+    }
+    function esc(v) {
+      return String(v ?? "").replaceAll("&","&amp;").replaceAll('"',"&quot;").replaceAll("<","&lt;");
+    }
+    function updateCounts() {
+      vpsCount.textContent = String(vpsRules.length);
+      routerCount.textContent = String(routerRules.length);
+      hookupCount.textContent = String(hookupRules.length);
+      fwCount.textContent = String(fwRules.length);
+    }
+    async function api(path, options = {}) {
+      const res = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || data.stderr || `HTTP ${res.status}`);
+      return data;
+    }
+
+    document.querySelectorAll(".nav-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
+        document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById(`view-${btn.dataset.view}`).classList.add("active");
+      });
+    });
+
+    function readVpsForm() {
+      return [...vpsRows.querySelectorAll("tr")].map((tr) => ({
+        pub: tr.querySelector('[data-k="pub"]').value.trim(),
+        proto: tr.querySelector('[data-k="proto"]').value,
+        dest_ip: tr.querySelector('[data-k="dest_ip"]').value.trim(),
+        dest_port: tr.querySelector('[data-k="dest_port"]').value.trim(),
+        name: tr.querySelector('[data-k="name"]').value.trim(),
+        external: tr.dataset.external === "1",
+        protected: tr.dataset.protected === "1",
+      }));
+    }
+    function readRouterForm() {
+      return [...routerRows.querySelectorAll("tr")].map((tr) => ({
+        enabled: tr.querySelector('[data-k="enabled"]').checked,
+        src: tr.querySelector('[data-k="src"]').value,
+        src_dport: tr.querySelector('[data-k="src_dport"]').value.trim(),
+        proto: tr.querySelector('[data-k="proto"]').value,
+        dest_ip: tr.querySelector('[data-k="dest_ip"]').value.trim(),
+        dest_port: tr.querySelector('[data-k="dest_port"]').value.trim(),
+        name: tr.querySelector('[data-k="name"]').value.trim(),
+        external: tr.dataset.external === "1",
+      }));
+    }
+    function readHookupForm() {
+      return [...hookupRows.querySelectorAll("tr")].map((tr) => ({
+        enabled: tr.querySelector('[data-k="enabled"]').checked,
+        vpn_only: tr.querySelector('[data-k="vpn_only"]').checked,
+        domain: tr.querySelector('[data-k="domain"]').value.trim(),
+        target_host: tr.querySelector('[data-k="target_host"]').value.trim(),
+        target_port: tr.querySelector('[data-k="target_port"]').value.trim(),
+        name: tr.querySelector('[data-k="name"]').value.trim(),
+        external: tr.dataset.external === "1",
+      }));
+    }
+    function readFwForm() {
+      return [...fwRows.querySelectorAll("tr")].map((tr) => ({
+        port: tr.querySelector('[data-k="port"]').value.trim(),
+        proto: tr.querySelector('[data-k="proto"]').value,
+        action: "allow",
+        comment: tr.querySelector('[data-k="comment"]').value.trim(),
+        vpn_only: tr.querySelector('[data-k="vpn_only"]').checked,
+        locked: tr.dataset.locked === "1",
+      }));
+    }
+
+    function renderVps() {
+      vpsRows.innerHTML = "";
+      vpsEmpty.hidden = vpsRules.length > 0;
+      vpsRules.forEach((rule, idx) => {
+        const protectedPort = Number(rule.pub) === 8080 || Number(rule.pub) === 8443;
+        const locked = !!rule.external || protectedPort;
+        const tr = document.createElement("tr");
+        if (rule.external) tr.dataset.external = "1";
+        if (protectedPort) tr.dataset.protected = "1";
+        let hint = "";
+        if (rule.external) hint = rule.ufw_only ? "existing UFW" : "existing DNAT";
+        else if (protectedPort) hint = "protected port";
+        tr.innerHTML = `
+          <td><input data-k="pub" inputmode="numeric" value="${esc(rule.pub)}" ${locked ? "readonly" : ""} /></td>
+          <td><select data-k="proto" ${locked ? "disabled" : ""}><option value="tcp" ${rule.proto==="tcp"?"selected":""}>tcp</option><option value="udp" ${rule.proto==="udp"?"selected":""}>udp</option></select></td>
+          <td class="arrow">→</td>
+          <td><input data-k="dest_ip" value="${esc(rule.dest_ip)}" ${locked ? "readonly" : ""} /></td>
+          <td><input data-k="dest_port" inputmode="numeric" value="${esc(rule.dest_port)}" ${locked ? "readonly" : ""} /></td>
+          <td><input data-k="name" value="${esc(rule.name)}" ${locked ? "readonly" : ""} />${hint ? `<div class="tag">${hint}</div>` : ""}</td>
+          <td>${locked ? "" : `<button type="button" class="ghost danger" data-del-vps="${idx}">✕</button>`}</td>`;
+        vpsRows.appendChild(tr);
+      });
+      vpsRows.querySelectorAll("[data-del-vps]").forEach((btn) => btn.addEventListener("click", () => {
+        vpsRules = readVpsForm(); vpsRules.splice(Number(btn.dataset.delVps), 1); renderVps(); updateCounts();
+      }));
+      updateCounts();
+    }
+
+    function renderRouter() {
+      routerRows.innerHTML = "";
+      routerEmpty.hidden = routerRules.length > 0;
+      routerRules.forEach((rule, idx) => {
+        const locked = !!rule.external;
+        const tr = document.createElement("tr");
+        if (locked) tr.dataset.external = "1";
+        tr.innerHTML = `
+          <td class="check"><input data-k="enabled" type="checkbox" ${rule.enabled !== false ? "checked" : ""} ${locked ? "disabled" : ""} /></td>
+          <td><select data-k="src" ${locked ? "disabled" : ""}><option value="wgclient1" ${rule.src==="wgclient1"?"selected":""}>wgclient1</option><option value="wan" ${rule.src==="wan"?"selected":""}>wan</option></select></td>
+          <td><input data-k="src_dport" inputmode="numeric" value="${esc(rule.src_dport)}" ${locked ? "readonly" : ""} /></td>
+          <td><select data-k="proto" ${locked ? "disabled" : ""}><option value="tcp" ${rule.proto==="tcp"?"selected":""}>tcp</option><option value="udp" ${rule.proto==="udp"?"selected":""}>udp</option><option value="tcp udp" ${rule.proto==="tcp udp"?"selected":""}>tcp udp</option><option value="all" ${rule.proto==="all"?"selected":""}>all</option></select></td>
+          <td class="arrow">→</td>
+          <td><input data-k="dest_ip" value="${esc(rule.dest_ip)}" ${locked ? "readonly" : ""} /></td>
+          <td><input data-k="dest_port" inputmode="numeric" value="${esc(rule.dest_port)}" ${locked ? "readonly" : ""} /></td>
+          <td><input data-k="name" value="${esc(rule.name)}" ${locked ? "readonly" : ""} />${locked ? '<div class="tag">existing router</div>' : ""}</td>
+          <td>${locked ? "" : `<button type="button" class="ghost danger" data-del-r="${idx}">✕</button>`}</td>`;
+        routerRows.appendChild(tr);
+      });
+      routerRows.querySelectorAll("[data-del-r]").forEach((btn) => btn.addEventListener("click", () => {
+        routerRules = readRouterForm(); routerRules.splice(Number(btn.dataset.delR), 1); renderRouter(); updateCounts();
+      }));
+      updateCounts();
+    }
+
+    function renderHookups() {
+      hookupRows.innerHTML = "";
+      hookupEmpty.hidden = hookupRules.length > 0;
+      hookupRules.forEach((rule, idx) => {
+        const locked = !!rule.external;
+        const tr = document.createElement("tr");
+        if (locked) tr.dataset.external = "1";
+        tr.innerHTML = `
+          <td class="check"><input data-k="enabled" type="checkbox" ${rule.enabled !== false ? "checked" : ""} ${locked ? "disabled" : ""} /></td>
+          <td class="check"><input data-k="vpn_only" type="checkbox" title="VPN only" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /></td>
+          <td><input data-k="domain" value="${esc(rule.domain)}" ${locked ? "readonly" : ""} placeholder="router.example.com" /></td>
+          <td class="arrow">→</td>
+          <td><input data-k="target_host" value="${esc(rule.target_host)}" ${locked ? "readonly" : ""} placeholder="192.168.8.1" /></td>
+          <td><input data-k="target_port" inputmode="numeric" value="${esc(rule.target_port)}" ${locked ? "readonly" : ""} /></td>
+          <td><input data-k="name" value="${esc(rule.name)}" ${locked ? "readonly" : ""} />${locked ? '<div class="tag">existing Caddy</div>' : (rule.vpn_only ? '<div class="tag">VPN only</div>' : "")}</td>
+          <td>${locked ? "" : `<button type="button" class="ghost danger" data-del-h="${idx}">✕</button>`}</td>`;
+        hookupRows.appendChild(tr);
+      });
+      hookupRows.querySelectorAll("[data-del-h]").forEach((btn) => btn.addEventListener("click", () => {
+        hookupRules = readHookupForm(); hookupRules.splice(Number(btn.dataset.delH), 1); renderHookups(); updateCounts();
+      }));
+      hookupRows.querySelectorAll('[data-k="vpn_only"]').forEach((el) => el.addEventListener("change", () => {
+        hookupRules = readHookupForm(); renderHookups();
+      }));
+      updateCounts();
+    }
+
+    function renderFirewall() {
+      fwRows.innerHTML = "";
+      fwEmpty.hidden = fwRules.length > 0;
+      const active = fwInfo.active ? "active" : "inactive";
+      const vpnFrom = fwInfo.vpn_from || "10.8.0.0/24";
+      fwMeta.innerHTML = `
+        <span class="hint">Status: <strong>${active}</strong></span>
+        <span class="hint">Incoming: <strong>${esc(fwInfo.default_incoming || "deny")}</strong></span>
+        <span class="hint">VPN only from: <strong>${esc(vpnFrom)}</strong></span>
+        <span class="hint">Protected stay public: 22/tcp, 5000/udp, 5002/tcp</span>`;
+      fwHint.textContent = `UFW ${active} · VPN checkbox = WireGuard only`;
+      fwRules.forEach((rule, idx) => {
+        const locked = !!rule.locked;
+        const tr = document.createElement("tr");
+        if (locked) tr.dataset.locked = "1";
+        tr.innerHTML = `
+          <td class="check"><input data-k="vpn_only" type="checkbox" title="VPN only" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /></td>
+          <td><input data-k="port" inputmode="numeric" value="${esc(rule.port)}" ${locked ? "readonly" : ""} /></td>
+          <td><select data-k="proto" ${locked ? "disabled" : ""}><option value="tcp" ${rule.proto==="tcp"?"selected":""}>tcp</option><option value="udp" ${rule.proto==="udp"?"selected":""}>udp</option></select></td>
+          <td><span class="tag">${rule.vpn_only ? "VPN" : "public"}</span></td>
+          <td><input data-k="comment" value="${esc(rule.comment)}" ${locked ? "readonly" : ""} />${locked ? '<div class="tag">protected</div>' : ""}</td>
+          <td>${locked ? "" : `<button type="button" class="ghost danger" data-del-fw="${idx}">✕</button>`}</td>`;
+        fwRows.appendChild(tr);
+      });
+      fwRows.querySelectorAll("[data-del-fw]").forEach((btn) => btn.addEventListener("click", () => {
+        fwRules = readFwForm(); fwRules.splice(Number(btn.dataset.delFw), 1); renderFirewall(); updateCounts();
+      }));
+      fwRows.querySelectorAll('[data-k="vpn_only"]').forEach((el) => el.addEventListener("change", () => {
+        fwRules = readFwForm(); renderFirewall();
+      }));
+      updateCounts();
+    }
+
+    async function load() {
+      setStatus("Loading…"); showLog("Loading configuration…");
+      const data = await api("/api/forwards");
+      comments = data.vps?.comments || [];
+      vpsRules = data.vps?.rules || [];
+      routerRules = data.router?.rules || [];
+      hookupRules = data.hookups?.rules || [];
+      fwInfo = data.firewall || {};
+      fwRules = fwInfo.rules || [];
+      dmzIpEl.value = data.router?.dmz_ip || "";
+      document.getElementById("routerHint").textContent = `${data.router?.host || "router"} ${data.router?.path || ""}`.trim();
+      document.getElementById("hookupsHint").textContent = data.hookups?.caddyfile || "Caddy HTTPS reverse proxies";
+      if (data.hookups?.dns_hint) dnsHint.textContent = data.hookups.dns_hint;
+      pathLabel.textContent = `${data.vps?.path || "vps"} · ufw`;
+      renderVps(); renderRouter(); renderHookups(); renderFirewall();
+      setStatus(`Loaded ${vpsRules.length}/${routerRules.length}/${hookupRules.length}/${fwRules.length}`, "ok");
+      showLog("Configuration loaded.");
+    }
+
+    async function save() {
+      vpsRules = readVpsForm();
+      routerRules = readRouterForm();
+      hookupRules = readHookupForm();
+      fwRules = readFwForm();
+      [saveBtn, reloadBtn].forEach((b) => (b.disabled = true));
+      setStatus("Applying…");
+      try {
+        const result = await api("/api/forwards", {
+          method: "PUT",
+          body: JSON.stringify({
+            vps: { rules: vpsRules, comments },
+            router: { dmz_ip: dmzIpEl.value.trim(), rules: routerRules },
+            hookups: { rules: hookupRules },
+            firewall: { rules: fwRules },
+          }),
+        });
+        vpsRules = result.vps?.rules || vpsRules;
+        routerRules = result.router?.rules || routerRules;
+        hookupRules = result.hookups?.rules || hookupRules;
+        fwInfo = result.firewall || fwInfo;
+        fwRules = fwInfo.rules || fwRules;
+        if (result.router?.dmz_ip) dmzIpEl.value = result.router.dmz_ip;
+        if (result.hookups?.dns_hint) dnsHint.textContent = result.hookups.dns_hint;
+        renderVps(); renderRouter(); renderHookups(); renderFirewall();
+        const log = [
+          "=== VPS ===", result.vps?.stdout, result.vps?.stderr,
+          "=== Router ===", result.router?.stdout, result.router?.stderr,
+          "=== Domains / Caddy ===", result.hookups?.stdout, result.hookups?.stderr,
+          "=== Firewall / UFW ===", result.firewall?.stdout, result.firewall?.stderr,
+        ].filter(Boolean).join("\n").trim();
+        showLog(log || "Applied.");
+        setStatus(result.ok ? "Applied" : "Apply errors", result.ok ? "ok" : "err");
+      } catch (err) {
+        setStatus(err.message || "Save failed", "err");
+        showLog(String(err.message || err));
+      } finally {
+        [saveBtn, reloadBtn].forEach((b) => (b.disabled = false));
+      }
+    }
+
+    document.getElementById("addVpsBtn").addEventListener("click", () => {
+      vpsRules = readVpsForm();
+      vpsRules.push({ pub:"", proto:"tcp", dest_ip: dmzIpEl.value || "192.168.8.243", dest_port:"", name:"new-rule" });
+      renderVps();
+    });
+    document.getElementById("addRouterBtn").addEventListener("click", () => {
+      routerRules = readRouterForm();
+      routerRules.push({ enabled:true, src:"wgclient1", src_dport:"", proto:"tcp", dest_ip: dmzIpEl.value || "192.168.8.243", dest_port:"", name:"new-rule" });
+      renderRouter();
+    });
+    document.getElementById("addHookupBtn").addEventListener("click", () => {
+      hookupRules = readHookupForm();
+      hookupRules.push({ enabled:true, vpn_only:true, domain:"", target_host:"192.168.8.1", target_port:"80", name:"new-domain" });
+      renderHookups();
+    });
+    document.getElementById("addFwBtn").addEventListener("click", () => {
+      fwRules = readFwForm();
+      fwRules.push({ port:"", proto:"tcp", action:"allow", comment:"new-rule", locked:false, vpn_only:true });
+      renderFirewall();
+    });
+    reloadBtn.addEventListener("click", () => load().catch((e) => setStatus(e.message, "err")));
+    saveBtn.addEventListener("click", () => save());
+    load().catch((e) => setStatus(e.message, "err"));
+  </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+[Unit]
+Description=ServerManager control panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/servermanager/panel
+EnvironmentFile=/opt/servermanager/panel.env
+ExecStart=/usr/bin/python3 /opt/servermanager/panel/server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+*.spec
+.env
+*.env
+panel.env
+**/panel.env
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+askpass.cmd
+*_known_hosts
+*.tgz
+*.tar.gz
+
+# keep Setup EXE, ignore pyinstaller work dirs
+build/
+*.spec
+!dist/
+!dist/ServerManager-Setup.exe
+
