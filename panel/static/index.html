@@ -146,6 +146,8 @@
     button:hover { border-color: rgba(61,222,160,.35); }
     button:disabled { opacity: .55; cursor: not-allowed; }
     button.primary { background: var(--accent); color: #062016; border-color: transparent; }
+    button.ghost { background: transparent; color: var(--muted); }
+    button.ghost:hover { color: var(--text); }
     button.ghost.danger { color: var(--danger); padding: 8px 10px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -658,9 +660,9 @@
     });
     reloadBtn.addEventListener("click", () => load().catch((e) => setStatus(e.message, "err")));
     saveBtn.addEventListener("click", () => save());
-    document.getElementById("logoutBtn").addEventListener("click", async () => {
-      try { await api("/api/logout", { method: "POST", body: "{}" }); } catch (_) {}
-      location.href = "/login.html";
+    document.getElementById("logoutBtn").addEventListener("click", () => {
+      // Full navigation clears cookie via server Set-Cookie (more reliable than fetch)
+      location.href = "/logout";
     });
     load().catch((e) => setStatus(e.message, "err"));
   </script>

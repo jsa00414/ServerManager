@@ -35,6 +35,11 @@ PANEL_TAGLINE = os.environ.get(
 )
 SESSION_HOURS = float(os.environ.get("SESSION_HOURS", "12"))
 COOKIE_NAME = "sm_session"
+ALLOW_BASIC_AUTH = os.environ.get("ALLOW_BASIC_AUTH", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 _sessions: dict[str, float] = {}
 _sessions_lock = threading.Lock()
@@ -1210,7 +1215,23 @@ def write_firewall_state(rules: list[dict]) -> dict:
     }
 
 
+def _cookie_clear_header() -> str:
+    return (
+        f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; "
+        "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+    )
+
+
+def _cookie_set_header(token: str) -> str:
+    return (
+        f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; "
+        f"Max-Age={int(SESSION_HOURS * 3600)}"
+    )
+
+
 def check_basic_auth(header: str | None) -> bool:
+    if not ALLOW_BASIC_AUTH:
+        return False
     if not header or not header.startswith("Basic "):
         return False
     try:
@@ -1295,15 +1316,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         if set_cookie:
-            self.send_header(
-                "Set-Cookie",
-                f"{COOKIE_NAME}={set_cookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age={int(SESSION_HOURS * 3600)}",
-            )
+            self.send_header("Set-Cookie", _cookie_set_header(set_cookie))
         if clear_cookie:
-            self.send_header(
-                "Set-Cookie",
-                f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-            )
+            self.send_header("Set-Cookie", _cookie_clear_header())
         self.end_headers()
         self.wfile.write(body)
 
@@ -1325,6 +1340,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path == "/logout":
+            destroy_session(parse_session_cookie(self.headers.get("Cookie")))
+            body = (
+                b"<!DOCTYPE html><html><head>"
+                b'<meta charset="utf-8" />'
+                b'<meta http-equiv="refresh" content="0;url=/login.html" />'
+                b"<title>Signing out</title>"
+                b"<script>location.replace('/login.html');</script>"
+                b"</head><body>Signed out. <a href='/login.html'>Continue</a></body></html>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", _cookie_clear_header())
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
             pass  # public
         elif not self._is_authed():
@@ -1358,9 +1391,11 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
         if path == "/login.html":
+            # Always clear any stale session display path; if still authed, go home
             if self._is_authed():
                 self.send_response(302)
                 self.send_header("Location", "/")
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
             return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
