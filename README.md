@@ -1,14 +1,9 @@
 # ServerManager
 Blank control panel + Windows setup tool to deploy onto a VPS and manage a GL.iNet router (WireGuard LAN forwards, UFW firewall, optional Caddy domains).
 
-## What you get
-- **panel/** — web control panel (VPS forwards, GL.iNet port forwards/DMZ, domains, firewall, VPN-only toggles)
-- **deploy/install-on-vps.sh** — server-side installer
-- **scripts/** — DNAT apply script + example `forwards.conf`
-- **setup/setup_wizard.py** — interactive Windows setup (build to `ServerManager-Setup.exe`)
-- **dist/ServerManager-Setup.exe** — prebuilt installer (when released)
-
-This repository is intentionally **blank**: no passwords, no hostnames, no live configs.
+## Features
+- Custom **login page** (session cookie) — create username/password/title in Setup before deploy
+- VPS DNAT forwards, GL.iNet port forwards, optional Caddy domains, UFW firewall + VPN-only toggles
 
 ## Requirements
 - Ubuntu/Debian VPS with root SSH

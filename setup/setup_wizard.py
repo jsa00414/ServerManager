@@ -183,10 +183,24 @@ def main() -> int:
         print("Router password is required")
         return 1
 
-    print("\n-- Panel login --")
+    print("\n-- Panel login page --")
     pf_user = prompt("Panel username", "admin")
     pf_pass = prompt("Panel password (blank = generate)", secret=True) or gen_password()
     pf_port = prompt("Panel TCP port", "5002")
+    panel_title = prompt("Login page title", "ServerManager")
+    panel_tagline = prompt(
+        "Login page tagline",
+        "Sign in to manage VPS forwards, GL.iNet, domains, and firewall.",
+    )
+    print("\nLogin preview")
+    print(f"  Title:    {panel_title}")
+    print(f"  Tagline:  {panel_tagline}")
+    print(f"  Username: {pf_user}")
+    print(f"  Password: {'*' * min(12, len(pf_pass))} ({len(pf_pass)} chars)")
+    confirm = prompt("Create this login and deploy to VPS? (y/N)", "y")
+    if confirm.lower() not in ("y", "yes"):
+        print("Cancelled — nothing was uploaded.")
+        return 0
 
     # Work in a path WITHOUT spaces (OpenSSH on Windows breaks on spaced argv)
     tmp = Path(tempfile.mkdtemp(prefix="smsetup-", dir=os.environ.get("TEMP", tempfile.gettempdir())))
@@ -209,6 +223,8 @@ def main() -> int:
 
     router_b64 = base64.b64encode(router_pass.encode("utf-8")).decode("ascii")
     pf_b64 = base64.b64encode(pf_pass.encode("utf-8")).decode("ascii")
+    title_b64 = base64.b64encode(panel_title.encode("utf-8")).decode("ascii")
+    tag_b64 = base64.b64encode(panel_tagline.encode("utf-8")).decode("ascii")
     run_sh = f"""#!/bin/bash
 set -euo pipefail
 export VPS_PUBLIC_IP='{vps_host}'
@@ -218,6 +234,8 @@ export PF_PORT='{pf_port}'
 export ROUTER_HOST='{router_host}'
 export ROUTER_USER='{router_user}'
 export ROUTER_PASS="$(printf '%s' '{router_b64}' | base64 -d)"
+export PANEL_TITLE="$(printf '%s' '{title_b64}' | base64 -d)"
+export PANEL_TAGLINE="$(printf '%s' '{tag_b64}' | base64 -d)"
 chmod +x {remote_tmp}/deploy/install-on-vps.sh {remote_tmp}/scripts/*.sh
 bash {remote_tmp}/deploy/install-on-vps.sh
 """

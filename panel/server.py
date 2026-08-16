@@ -13,6 +13,8 @@ import secrets
 import subprocess
 import tempfile
 import threading
+import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -26,6 +28,16 @@ HOST = os.environ.get("PF_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PF_PORT", "5002"))
 AUTH_USER = os.environ.get("PF_USER", "admin")
 AUTH_PASS = os.environ.get("PF_PASS", "")
+PANEL_TITLE = os.environ.get("PANEL_TITLE", "ServerManager")
+PANEL_TAGLINE = os.environ.get(
+    "PANEL_TAGLINE",
+    "Sign in to manage VPS forwards, GL.iNet, domains, and firewall.",
+)
+SESSION_HOURS = float(os.environ.get("SESSION_HOURS", "12"))
+COOKIE_NAME = "sm_session"
+
+_sessions: dict[str, float] = {}
+_sessions_lock = threading.Lock()
 
 ROUTER_HOST = os.environ.get("ROUTER_HOST", "192.168.8.1")
 ROUTER_USER = os.environ.get("ROUTER_USER", "root")
@@ -1211,32 +1223,99 @@ def check_basic_auth(header: str | None) -> bool:
     )
 
 
+def _purge_sessions(now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    dead = [k for k, exp in _sessions.items() if exp <= now]
+    for k in dead:
+        _sessions.pop(k, None)
+
+
+def create_session() -> str:
+    token = secrets.token_urlsafe(32)
+    with _sessions_lock:
+        _purge_sessions()
+        _sessions[token] = time.time() + SESSION_HOURS * 3600
+    return token
+
+
+def destroy_session(token: str | None) -> None:
+    if not token:
+        return
+    with _sessions_lock:
+        _sessions.pop(token, None)
+
+
+def session_valid(token: str | None) -> bool:
+    if not token:
+        return False
+    now = time.time()
+    with _sessions_lock:
+        _purge_sessions(now)
+        exp = _sessions.get(token)
+        return bool(exp and exp > now)
+
+
+def parse_session_cookie(header: str | None) -> str | None:
+    if not header:
+        return None
+    jar = SimpleCookie()
+    try:
+        jar.load(header)
+    except Exception:
+        return None
+    morsel = jar.get(COOKIE_NAME)
+    return morsel.value if morsel else None
+
+
+def check_credentials(username: str, password: str) -> bool:
+    return hmac.compare_digest(username, AUTH_USER) and hmac.compare_digest(
+        password, AUTH_PASS
+    )
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "PortForwardUI/1.1"
+    server_version = "ServerManager/1.2"
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {self.address_string()} {fmt % args}")
 
-    def _unauthorized(self) -> None:
-        self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="ServerManager"')
-        self.send_header("Content-Type", "application/json")
+    def _unauthorized(self, *, api: bool = True) -> None:
+        if api:
+            self._json(401, {"error": "unauthorized"})
+            return
+        self.send_response(302)
+        self.send_header("Location", "/login.html")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(b'{"error":"unauthorized"}')
 
-    def _json(self, code: int, payload: dict) -> None:
+    def _json(self, code: int, payload: dict, *, set_cookie: str | None = None, clear_cookie: bool = False) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if set_cookie:
+            self.send_header(
+                "Set-Cookie",
+                f"{COOKIE_NAME}={set_cookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age={int(SESSION_HOURS * 3600)}",
+            )
+        if clear_cookie:
+            self.send_header(
+                "Set-Cookie",
+                f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+            )
         self.end_headers()
         self.wfile.write(body)
 
-    def _require_auth(self) -> bool:
+    def _is_authed(self) -> bool:
         if check_basic_auth(self.headers.get("Authorization")):
             return True
-        self._unauthorized()
+        return session_valid(parse_session_cookie(self.headers.get("Cookie")))
+
+    def _require_auth(self, *, api: bool = True) -> bool:
+        if self._is_authed():
+            return True
+        self._unauthorized(api=api)
         return False
 
     def _read_json(self) -> dict:
@@ -1245,9 +1324,28 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8") or "{}")
 
     def do_GET(self) -> None:  # noqa: N802
-        if not self._require_auth():
-            return
         path = urlparse(self.path).path
+        if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
+            pass  # public
+        elif not self._is_authed():
+            if path.startswith("/api/"):
+                self._unauthorized(api=True)
+            else:
+                self._unauthorized(api=False)
+            return
+
+        if path == "/api/branding":
+            self._json(
+                200,
+                {
+                    "title": PANEL_TITLE,
+                    "tagline": PANEL_TAGLINE,
+                },
+            )
+            return
+        if path == "/api/me":
+            self._json(200, {"ok": True, "user": AUTH_USER, "title": PANEL_TITLE})
+            return
         if path == "/api/forwards":
             try:
                 self._json(200, read_state())
@@ -1259,6 +1357,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/", "/index.html"):
             return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+        if path == "/login.html":
+            if self._is_authed():
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.end_headers()
+                return
+            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
@@ -1266,11 +1371,38 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(404, {"error": "not found"})
                 return
             ctype = "text/css" if target.suffix == ".css" else "application/javascript"
+            if target.suffix == ".html":
+                ctype = "text/html; charset=utf-8"
             return self._serve_file(target, ctype)
         self._json(404, {"error": "not found"})
 
+    def do_POST(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        if path == "/api/login":
+            try:
+                payload = self._read_json()
+                user = str(payload.get("username", "")).strip()
+                password = str(payload.get("password", ""))
+            except Exception:
+                self._json(400, {"error": "invalid json"})
+                return
+            if not check_credentials(user, password):
+                time.sleep(0.35)
+                self._json(401, {"error": "Invalid username or password"})
+                return
+            token = create_session()
+            self._json(200, {"ok": True, "user": AUTH_USER}, set_cookie=token)
+            return
+        if path == "/api/logout":
+            destroy_session(parse_session_cookie(self.headers.get("Cookie")))
+            self._json(200, {"ok": True}, clear_cookie=True)
+            return
+        if not self._require_auth(api=True):
+            return
+        self._json(404, {"error": "not found"})
+
     def do_PUT(self) -> None:  # noqa: N802
-        if not self._require_auth():
+        if not self._require_auth(api=True):
             return
         path = urlparse(self.path).path
         if path != "/api/forwards":
@@ -1312,7 +1444,8 @@ def main() -> None:
     if subprocess.run(["bash", "-lc", "command -v sshpass"], capture_output=True).returncode != 0:
         raise SystemExit("sshpass is required on the VPS (apt install sshpass)")
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"Port forward UI on http://{HOST}:{PORT}")
+    print(f"ServerManager panel on http://{HOST}:{PORT}")
+    print(f"  title:    {PANEL_TITLE}")
     print(f"  vps conf: {CONF_PATH}")
     print(f"  router:   {ROUTER_USER}@{ROUTER_HOST}:{ROUTER_CONF}")
     httpd.serve_forever()

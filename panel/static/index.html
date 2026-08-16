@@ -217,6 +217,7 @@
       <div class="actions">
         <button type="button" id="reloadBtn">Reload</button>
         <button type="button" class="primary" id="saveBtn">Save &amp; Apply</button>
+        <button type="button" class="ghost" id="logoutBtn">Log out</button>
       </div>
     </div>
   </header>
@@ -394,7 +395,15 @@
       fwCount.textContent = String(fwRules.length);
     }
     async function api(path, options = {}) {
-      const res = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+      const res = await fetch(path, {
+        ...options,
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+      if (res.status === 401) {
+        location.href = "/login.html";
+        throw new Error("unauthorized");
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || data.stderr || `HTTP ${res.status}`);
       return data;
@@ -649,6 +658,10 @@
     });
     reloadBtn.addEventListener("click", () => load().catch((e) => setStatus(e.message, "err")));
     saveBtn.addEventListener("click", () => save());
+    document.getElementById("logoutBtn").addEventListener("click", async () => {
+      try { await api("/api/logout", { method: "POST", body: "{}" }); } catch (_) {}
+      location.href = "/login.html";
+    });
     load().catch((e) => setStatus(e.message, "err"));
   </script>
 </body>
