@@ -24,6 +24,12 @@ APPLY_SCRIPT = Path(
     os.environ.get("APPLY_SCRIPT", "/opt/servermanager/scripts/apply-lan-forwards.sh")
 )
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+ROUTER_KNOWN_HOSTS = Path(
+    os.environ.get(
+        "ROUTER_KNOWN_HOSTS",
+        str(Path(__file__).resolve().parent / "router_known_hosts"),
+    )
+)
 HOST = os.environ.get("PF_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PF_PORT", "5002"))
 AUTH_USER = os.environ.get("PF_USER", "admin")
@@ -441,6 +447,7 @@ def parse_router_conf(text: str) -> dict:
 
 def router_ssh(remote_cmd: str, input_text: str | None = None) -> subprocess.CompletedProcess:
     """Run a command on the Flint router via sshpass."""
+    ROUTER_KNOWN_HOSTS.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "sshpass",
         "-p",
@@ -449,7 +456,7 @@ def router_ssh(remote_cmd: str, input_text: str | None = None) -> subprocess.Com
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
-        "UserKnownHostsFile=/opt/servermanager/panel/router_known_hosts",
+        f"UserKnownHostsFile={ROUTER_KNOWN_HOSTS}",
         "-o",
         "PreferredAuthentications=password",
         "-o",
@@ -487,24 +494,32 @@ def read_router_state() -> dict:
 def write_router_state(dmz_ip: str, rules: list[dict]) -> dict:
     dmz_ip, cleaned = validate_router(dmz_ip, rules)
     text = serialize_router_conf(dmz_ip, cleaned)
-    # Upload via base64 to avoid shell escaping issues
-    b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    # 1) Stream file over SSH stdin (GL.iNet ash has no base64)
+    upload = router_ssh(f"cat > {ROUTER_CONF}.tmp", input_text=text)
+    if upload.returncode != 0:
+        return {
+            "ok": False,
+            "returncode": upload.returncode,
+            "stdout": (upload.stdout or "")[-2000:],
+            "stderr": (upload.stderr or "upload failed")[-2000:],
+            "dmz_ip": dmz_ip,
+            "rules": cleaned,
+        }
+    # 2) Activate config; reload firewall in background so SSH cannot hang
     remote = (
-        f"echo {b64} | base64 -d > {ROUTER_CONF}.tmp && "
         f"mv {ROUTER_CONF}.tmp {ROUTER_CONF} && "
-        f"(/etc/init.d/firewall reload >/dev/null 2>&1 || fw3 reload >/dev/null 2>&1 || true) && "
+        f"( (/etc/init.d/firewall reload >/dev/null 2>&1 || fw3 reload >/dev/null 2>&1 || true) & ) && "
         f"(ubus call port_forward sync_config '{{}}' >/dev/null 2>&1 || true) && "
         f"echo OK && cat {ROUTER_CONF}"
     )
     proc = router_ssh(remote)
     ok = proc.returncode == 0 and "OK" in (proc.stdout or "")
-    # Re-parse so UI keeps seeing DMZ + existing rows
     parsed = parse_router_conf(proc.stdout.split("OK\n", 1)[-1] if ok else text)
     return {
         "ok": ok,
         "returncode": proc.returncode,
-        "stdout": (proc.stdout or "")[-4000:],
-        "stderr": (proc.stderr or "")[-2000:],
+        "stdout": ((upload.stdout or "") + "\n" + (proc.stdout or ""))[-4000:],
+        "stderr": ((upload.stderr or "") + "\n" + (proc.stderr or ""))[-2000:],
         "dmz_ip": parsed["dmz_ip"],
         "rules": parsed["rules"],
     }
@@ -579,8 +594,14 @@ def write_vps_state(rules: list[dict], comments: list[str] | None = None) -> dic
 
 
 def resolve_mail_hostname() -> str:
-    env_path = Path(os.environ.get("MAIL_ENV_PATH", ""))
-    if env_path.is_file():
+    candidates = []
+    raw = os.environ.get("MAIL_ENV_PATH", "").strip()
+    if raw:
+        candidates.append(Path(raw))
+    candidates.append(Path("/opt/truemail/.env"))
+    for env_path in candidates:
+        if not env_path.is_file():
+            continue
         for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
             if line.startswith("MAIL_HOSTNAME="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
@@ -811,6 +832,161 @@ def read_hookups_state() -> dict:
     }
 
 
+def _dns_a_records(domain: str) -> list[str]:
+    ips: list[str] = []
+    try:
+        proc = subprocess.run(
+            ["getent", "ahostsv4", domain],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split()
+            if parts and re.match(r"^\d+\.\d+\.\d+\.\d+$", parts[0]):
+                ips.append(parts[0])
+    except Exception:
+        pass
+    if not ips:
+        try:
+            proc = subprocess.run(
+                ["dig", "+short", "A", domain],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            for line in (proc.stdout or "").splitlines():
+                line = line.strip()
+                if re.match(r"^\d+\.\d+\.\d+\.\d+$", line):
+                    ips.append(line)
+        except Exception:
+            pass
+    return sorted(set(ips))
+
+
+def _caddy_domain_has_cert(domain: str) -> bool:
+    if not CADDY_CONTAINER:
+        return False
+    proc = subprocess.run(
+        [
+            "docker",
+            "exec",
+            CADDY_CONTAINER,
+            "sh",
+            "-c",
+            f"find /data/caddy/certificates -type d -name '{domain}' 2>/dev/null | head -n 1",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    return bool((proc.stdout or "").strip())
+
+
+def _https_probe_ok(domain: str) -> bool:
+    proc = subprocess.run(
+        [
+            "curl",
+            "-sS",
+            "-m",
+            "12",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            f"https://{domain}/",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    code = (proc.stdout or "").strip()
+    return code.isdigit() and code != "000"
+
+
+def ensure_hookup_certificates(domains: list[str]) -> tuple[bool, str, str]:
+    """Make sure Caddy has issued TLS certs for managed domains (DNS must already point here)."""
+    domains = [d.strip().lower() for d in domains if d and "." in d]
+    if not domains or not CADDY_CONTAINER:
+        return True, "No domains needing certs", ""
+
+    logs: list[str] = []
+    warnings: list[str] = []
+    need: list[str] = []
+    for domain in domains:
+        ips = _dns_a_records(domain)
+        if VPS_PUBLIC_IP not in ips:
+            warnings.append(
+                f"{domain}: DNS A record missing/incorrect (have {ips or ['none']}; need {VPS_PUBLIC_IP})"
+            )
+            continue
+        if _caddy_domain_has_cert(domain) and _https_probe_ok(domain):
+            logs.append(f"{domain}: certificate ready")
+            continue
+        need.append(domain)
+
+    if not need:
+        msg = "TLS: " + ("; ".join(logs) if logs else "nothing to do")
+        if warnings:
+            msg += " | WARN: " + "; ".join(warnings)
+        return True, msg, "\n".join(warnings)
+
+    logs.append(f"Requesting certificates for: {', '.join(need)}")
+    # Reload first (picks up new site blocks), then restart if certs still missing.
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            CADDY_CONTAINER,
+            "caddy",
+            "reload",
+            "--config",
+            "/etc/caddy/Caddyfile",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    time.sleep(2)
+    still = [d for d in need if not _caddy_domain_has_cert(d)]
+    if still:
+        logs.append(f"Restarting {CADDY_CONTAINER} to force ACME for: {', '.join(still)}")
+        subprocess.run(
+            ["docker", "restart", CADDY_CONTAINER],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        time.sleep(3)
+
+    deadline = time.time() + 90
+    pending = list(need)
+    while pending and time.time() < deadline:
+        pending = [d for d in pending if not _caddy_domain_has_cert(d)]
+        if not pending:
+            break
+        time.sleep(3)
+
+    ok = True
+    for domain in need:
+        if _caddy_domain_has_cert(domain):
+            probe = "https ok" if _https_probe_ok(domain) else "cert present (https still warming)"
+            logs.append(f"{domain}: {probe}")
+        else:
+            ok = False
+            logs.append(f"{domain}: certificate not issued yet — check DNS and Caddy logs")
+
+    if warnings:
+        logs.extend(f"WARN: {w}" for w in warnings)
+    return ok, "\n".join(logs), "\n".join(warnings)
+
+
 def write_hookups_state(rules: list[dict]) -> dict:
     cleaned = validate_hookups(rules)
     # Persist only managed (non-external) rules; external stay in main Caddyfile
@@ -880,15 +1056,40 @@ def write_hookups_state(rules: list[dict]) -> dict:
         timeout=60,
         check=False,
     )
-    # Return merged list again so UI keeps seeing existing domains
+    cert_ok = True
+    cert_out = ""
+    cert_err = ""
+    if reload.returncode == 0:
+        active_domains = [
+            r["domain"] for r in managed if r.get("enabled", True) and not r.get("vpn_only")
+        ]
+        # Also issue certs for VPN-only domains (needed so TLS works for VPN clients)
+        active_domains += [
+            r["domain"] for r in managed if r.get("enabled", True) and r.get("vpn_only")
+        ]
+        # unique preserve order
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for d in active_domains:
+            if d not in seen:
+                seen.add(d)
+                ordered.append(d)
+        cert_ok, cert_out, cert_err = ensure_hookup_certificates(ordered)
+
     merged = merge_hookup_lists(managed, parse_caddy_existing_sites(updated))
+    ok = reload.returncode == 0 and cert_ok
     return {
-        "ok": reload.returncode == 0,
-        "returncode": reload.returncode,
-        "stdout": ((validate.stdout or "") + "\n" + (reload.stdout or ""))[-4000:],
-        "stderr": (reload.stderr or "")[-2000:],
+        "ok": ok,
+        "returncode": 0 if ok else (reload.returncode or 1),
+        "stdout": (
+            ((validate.stdout or "") + "\n" + (reload.stdout or "") + "\n" + cert_out)
+        )[-4000:],
+        "stderr": ((reload.stderr or "") + "\n" + cert_err)[-2000:],
         "rules": merged,
-        "dns_hint": f"Point each domain A record to {VPS_PUBLIC_IP} (DNS only / grey cloud)",
+        "dns_hint": (
+            f"Point each domain A record to {VPS_PUBLIC_IP} (DNS only / grey cloud). "
+            "Panel auto-requests Let's Encrypt after Save & Apply."
+        ),
     }
 
 
@@ -1452,6 +1653,17 @@ class Handler(BaseHTTPRequestHandler):
                     "router": payload.get("router") or {},
                 }
             result = write_and_apply(payload)
+            # Ensure JSON-serializable summary always includes a top-level error hint
+            if not result.get("ok"):
+                bits = []
+                for key in ("vps", "router", "hookups", "firewall"):
+                    part = result.get(key) or {}
+                    if part.get("ok") is False:
+                        bits.append(
+                            f"{key}: {(part.get('stderr') or part.get('stdout') or 'failed')[-500:]}"
+                        )
+                if bits and not result.get("error"):
+                    result["error"] = " | ".join(bits)
             self._json(200 if result["ok"] else 500, result)
         except ValueError as exc:
             self._json(400, {"error": str(exc)})

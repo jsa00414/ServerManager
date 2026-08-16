@@ -302,7 +302,7 @@
             <button type="button" id="addHookupBtn">Add domain</button>
           </div>
           <div class="meta">
-            <span class="hint" id="dnsHint">Create Cloudflare A records (DNS only) → your VPS IP</span>
+            <span class="hint" id="dnsHint">Create Cloudflare A records (DNS only) → your VPS IP. Save &amp; Apply auto-issues HTTPS.</span>
           </div>
           <div class="table-wrap">
             <table>
@@ -650,7 +650,7 @@
     });
     document.getElementById("addHookupBtn").addEventListener("click", () => {
       hookupRules = readHookupForm();
-      hookupRules.push({ enabled:true, vpn_only:true, domain:"", target_host:"192.168.8.1", target_port:"80", name:"new-domain" });
+      hookupRules.push({ enabled:true, vpn_only:false, domain:"", target_host:"192.168.8.1", target_port:"80", name:"new-domain" });
       renderHookups();
     });
     document.getElementById("addFwBtn").addEventListener("click", () => {
