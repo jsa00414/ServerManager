@@ -834,35 +834,26 @@ def read_hookups_state() -> dict:
 
 def _dns_a_records(domain: str) -> list[str]:
     ips: list[str] = []
-    try:
-        proc = subprocess.run(
-            ["getent", "ahostsv4", domain],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        for line in (proc.stdout or "").splitlines():
-            parts = line.split()
-            if parts and re.match(r"^\d+\.\d+\.\d+\.\d+$", parts[0]):
-                ips.append(parts[0])
-    except Exception:
-        pass
-    if not ips:
+    queries = [
+        ["getent", "ahostsv4", domain],
+        ["dig", "+short", "A", domain],
+        ["dig", "+short", "A", domain, "@1.1.1.1"],
+        ["dig", "+short", "A", domain, "@8.8.8.8"],
+    ]
+    for cmd in queries:
         try:
             proc = subprocess.run(
-                ["dig", "+short", "A", domain],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
+                cmd, capture_output=True, text=True, timeout=10, check=False
             )
-            for line in (proc.stdout or "").splitlines():
-                line = line.strip()
-                if re.match(r"^\d+\.\d+\.\d+\.\d+$", line):
-                    ips.append(line)
         except Exception:
-            pass
+            continue
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split()
+            cand = (parts[0] if parts else "").strip()
+            if re.match(r"^\d+\.\d+\.\d+\.\d+$", cand):
+                ips.append(cand)
+        if ips:
+            break
     return sorted(set(ips))
 
 
@@ -987,6 +978,23 @@ def ensure_hookup_certificates(domains: list[str]) -> tuple[bool, str, str]:
     return ok, "\n".join(logs), "\n".join(warnings)
 
 
+def _write_text_inplace(path: Path, text: str) -> None:
+    """Overwrite file bytes without replacing the inode.
+
+    Docker bind-mounts pin the inode at container start. Atomic replace
+    (tempfile + rename) leaves the container reading a stale Caddyfile, so
+    disabling a domain in the panel would not take effect until restart.
+    """
+    data = text.encode("utf-8")
+    if not path.exists():
+        path.write_bytes(data)
+        return
+    with path.open("r+b") as fh:
+        fh.seek(0)
+        fh.write(data)
+        fh.truncate(len(data))
+
+
 def write_hookups_state(rules: list[dict]) -> dict:
     cleaned = validate_hookups(rules)
     # Persist only managed (non-external) rules; external stay in main Caddyfile
@@ -1014,9 +1022,7 @@ def write_hookups_state(rules: list[dict]) -> dict:
         }
     original = CADDYFILE_PATH.read_text(encoding="utf-8")
     updated = upsert_caddy_hookups_block(original, serialize_hookups_caddy(managed))
-    tmp = CADDYFILE_PATH.with_suffix(".tmp")
-    tmp.write_text(updated, encoding="utf-8")
-    tmp.replace(CADDYFILE_PATH)
+    _write_text_inplace(CADDYFILE_PATH, updated)
     validate = subprocess.run(
         [
             "docker",
@@ -1033,7 +1039,7 @@ def write_hookups_state(rules: list[dict]) -> dict:
         check=False,
     )
     if validate.returncode != 0:
-        CADDYFILE_PATH.write_text(original, encoding="utf-8")
+        _write_text_inplace(CADDYFILE_PATH, original)
         return {
             "ok": False,
             "returncode": validate.returncode,
@@ -1056,6 +1062,32 @@ def write_hookups_state(rules: list[dict]) -> dict:
         timeout=60,
         check=False,
     )
+    # If reload fails (or mount was previously desynced), restart once so
+    # disabled sites actually drop.
+    if reload.returncode != 0:
+        subprocess.run(
+            ["docker", "restart", CADDY_CONTAINER],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        time.sleep(2)
+        reload = subprocess.run(
+            [
+                "docker",
+                "exec",
+                CADDY_CONTAINER,
+                "caddy",
+                "reload",
+                "--config",
+                "/etc/caddy/Caddyfile",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
     cert_ok = True
     cert_out = ""
     cert_err = ""
