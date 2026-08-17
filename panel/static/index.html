@@ -307,7 +307,7 @@
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th class="check">On</th><th class="check">VPN</th><th>Domain</th><th></th><th>Target host</th><th>Port</th><th>Name</th><th></th></tr>
+                <tr><th class="check">On</th><th class="check" title="Checked = WireGuard/LAN only. Unchecked = public internet.">VPN</th><th>Domain</th><th></th><th>Target host</th><th>Port</th><th>Name</th><th></th></tr>
               </thead>
               <tbody id="hookupRows"></tbody>
             </table>
@@ -527,12 +527,12 @@
         if (locked) tr.dataset.external = "1";
         tr.innerHTML = `
           <td class="check"><input data-k="enabled" type="checkbox" ${rule.enabled !== false ? "checked" : ""} ${locked ? "disabled" : ""} /></td>
-          <td class="check"><input data-k="vpn_only" type="checkbox" title="VPN only" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /></td>
+          <td class="check"><input data-k="vpn_only" type="checkbox" title="VPN only: checked = WireGuard/LAN only; unchecked = public" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /></td>
           <td><input data-k="domain" value="${esc(rule.domain)}" ${locked ? "readonly" : ""} placeholder="router.example.com" /></td>
           <td class="arrow">→</td>
           <td><input data-k="target_host" value="${esc(rule.target_host)}" ${locked ? "readonly" : ""} placeholder="192.168.8.1" /></td>
           <td><input data-k="target_port" inputmode="numeric" value="${esc(rule.target_port)}" ${locked ? "readonly" : ""} /></td>
-          <td><input data-k="name" value="${esc(rule.name)}" ${locked ? "readonly" : ""} />${locked ? '<div class="tag">existing Caddy</div>' : (rule.vpn_only ? '<div class="tag">VPN only</div>' : "")}</td>
+          <td><input data-k="name" value="${esc(rule.name)}" ${locked ? "readonly" : ""} />${locked ? '<div class="tag">existing Caddy</div>' : `<div class="tag">${rule.vpn_only ? "VPN only" : "public"}</div>`}</td>
           <td>${locked ? "" : `<button type="button" class="ghost danger" data-del-h="${idx}">✕</button>`}</td>`;
         hookupRows.appendChild(tr);
       });

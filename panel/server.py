@@ -672,7 +672,8 @@ def parse_caddy_existing_sites(caddy_text: str) -> list[dict]:
                 name = domain.split(".")[0][:40]
             vpn_only = bool(
                 re.search(r"client_ip[^\n]*10\.8\.0\.0/24", body_text)
-                or re.search(r"@vpn\s+client_ip", body_text)
+                or re.search(r"@vpn(?:_clients)?\s+client_ip", body_text)
+                or "VPN required" in body_text
             )
             sites.append(
                 {
@@ -705,7 +706,7 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
             target_port = int(rule["target_port"])
             name = str(rule.get("name", f"hook{i+1}")).strip() or f"hook{i+1}"
             external = bool(rule.get("external", False))
-            vpn_only = bool(rule.get("vpn_only", False))
+            vpn_only = _as_bool(rule.get("vpn_only", False))
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Hookup {i + 1}: missing/invalid fields") from exc
         if not DOMAIN_RE.match(domain):
@@ -738,6 +739,16 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
     return cleaned
 
 
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def serialize_hookups_caddy(rules: list[dict]) -> str:
     lines = [
         HOOKUPS_BEGIN,
@@ -752,14 +763,16 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         lines.append(f"{r['domain']} {{")
         lines.append("\tencode gzip")
         if r.get("vpn_only"):
-            lines.append(f"\t@vpn client_ip {VPN_CLIENT_CIDRS}")
-            lines.append("\thandle @vpn {")
+            # Explicit allow-list + 403 for everyone else (clearer than abort).
+            lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+            lines.append("\thandle @vpn_clients {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']}")
             lines.append("\t}")
             lines.append("\thandle {")
-            lines.append("\t\tabort")
+            lines.append('\t\trespond "VPN required" 403')
             lines.append("\t}")
         else:
+            # Public: plain reverse_proxy only — no client_ip matcher residue.
             lines.append(f"\treverse_proxy {r['target_host']}:{r['target_port']}")
         lines.extend(
             [
@@ -767,7 +780,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
                 "\t\tX-Content-Type-Options nosniff",
                 "\t\tReferrer-Policy strict-origin-when-cross-origin",
-                "\t\tX-Frame-Options DENY",
+                '\t\tContent-Security-Policy "frame-ancestors *"',
                 "\t}",
                 "}",
                 "",
@@ -999,18 +1012,22 @@ def write_hookups_state(rules: list[dict]) -> dict:
     cleaned = validate_hookups(rules)
     # Persist only managed (non-external) rules; external stay in main Caddyfile
     managed = [r for r in cleaned if not r.get("external")]
-    HOOKUPS_JSON.parent.mkdir(parents=True, exist_ok=True)
-    HOOKUPS_JSON.write_text(
-        json.dumps({"rules": managed}, indent=2) + "\n", encoding="utf-8"
+    dns_hint = (
+        f"Point each domain A record to {VPS_PUBLIC_IP} (DNS only / grey cloud). "
+        "VPN unchecked = public HTTPS; VPN checked = WireGuard/LAN clients only."
     )
     if not str(CADDYFILE_PATH) or not CADDYFILE_PATH.is_file():
+        HOOKUPS_JSON.parent.mkdir(parents=True, exist_ok=True)
+        HOOKUPS_JSON.write_text(
+            json.dumps({"rules": managed}, indent=2) + "\n", encoding="utf-8"
+        )
         return {
             "ok": True,
             "returncode": 0,
             "stdout": "Saved hookups.json (Caddy not configured — skipped reload)",
             "stderr": "",
             "rules": cleaned,
-            "dns_hint": f"Point each domain A record to {VPS_PUBLIC_IP} (DNS only / grey cloud)",
+            "dns_hint": dns_hint,
         }
     if not CADDY_CONTAINER:
         return {
@@ -1019,9 +1036,12 @@ def write_hookups_state(rules: list[dict]) -> dict:
             "stdout": "",
             "stderr": "CADDY_CONTAINER env var required when CADDYFILE_PATH is set",
             "rules": cleaned,
+            "dns_hint": dns_hint,
         }
     original = CADDYFILE_PATH.read_text(encoding="utf-8")
-    updated = upsert_caddy_hookups_block(original, serialize_hookups_caddy(managed))
+    new_block = serialize_hookups_caddy(managed)
+    updated = upsert_caddy_hookups_block(original, new_block)
+    block_changed = original != updated
     _write_text_inplace(CADDYFILE_PATH, updated)
     validate = subprocess.run(
         [
@@ -1046,7 +1066,9 @@ def write_hookups_state(rules: list[dict]) -> dict:
             "stdout": (validate.stdout or "")[-4000:],
             "stderr": (validate.stderr or "")[-2000:] or "Caddy validate failed; rolled back",
             "rules": cleaned,
+            "dns_hint": dns_hint,
         }
+
     reload = subprocess.run(
         [
             "docker",
@@ -1062,32 +1084,49 @@ def write_hookups_state(rules: list[dict]) -> dict:
         timeout=60,
         check=False,
     )
-    # If reload fails (or mount was previously desynced), restart once so
-    # disabled sites actually drop.
-    if reload.returncode != 0:
-        subprocess.run(
+    restart_out = ""
+    # VPN on/off and enable toggles must not leave stale client_ip routes.
+    # Restart whenever the managed block changed, or whenever reload failed.
+    if block_changed or reload.returncode != 0:
+        rst = subprocess.run(
             ["docker", "restart", CADDY_CONTAINER],
             capture_output=True,
             text=True,
             timeout=120,
             check=False,
         )
-        time.sleep(2)
-        reload = subprocess.run(
-            [
-                "docker",
-                "exec",
-                CADDY_CONTAINER,
-                "caddy",
-                "reload",
-                "--config",
-                "/etc/caddy/Caddyfile",
-            ],
+        restart_out = (rst.stdout or "") + (rst.stderr or "")
+        time.sleep(3)
+        # Confirm container is up; reload is optional after restart (config loaded at start)
+        alive = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", CADDY_CONTAINER],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=30,
             check=False,
         )
+        if (alive.stdout or "").strip().lower() == "true":
+            reload = subprocess.CompletedProcess(
+                args=reload.args,
+                returncode=0,
+                stdout=(reload.stdout or "") + "\nCaddy restarted to apply VPN/public mode\n",
+                stderr=reload.stderr or "",
+            )
+        else:
+            reload = subprocess.CompletedProcess(
+                args=reload.args,
+                returncode=1,
+                stdout=reload.stdout or "",
+                stderr=(reload.stderr or "") + "\nCaddy restart failed\n" + restart_out,
+            )
+
+    # Persist JSON only after Caddy accepted the new config (keeps UI in sync)
+    if reload.returncode == 0:
+        HOOKUPS_JSON.parent.mkdir(parents=True, exist_ok=True)
+        HOOKUPS_JSON.write_text(
+            json.dumps({"rules": managed}, indent=2) + "\n", encoding="utf-8"
+        )
+
     cert_ok = True
     cert_out = ""
     cert_err = ""
@@ -1108,7 +1147,7 @@ def write_hookups_state(rules: list[dict]) -> dict:
                 ordered.append(d)
         cert_ok, cert_out, cert_err = ensure_hookup_certificates(ordered)
 
-    merged = merge_hookup_lists(managed, parse_caddy_existing_sites(updated))
+    merged = merge_hookup_lists(managed, parse_caddy_existing_sites(updated if reload.returncode == 0 else original))
     ok = reload.returncode == 0 and cert_ok
     return {
         "ok": ok,
@@ -1118,10 +1157,7 @@ def write_hookups_state(rules: list[dict]) -> dict:
         )[-4000:],
         "stderr": ((reload.stderr or "") + "\n" + cert_err)[-2000:],
         "rules": merged,
-        "dns_hint": (
-            f"Point each domain A record to {VPS_PUBLIC_IP} (DNS only / grey cloud). "
-            "Panel auto-requests Let's Encrypt after Save & Apply."
-        ),
+        "dns_hint": dns_hint,
     }
 
 
